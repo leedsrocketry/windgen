@@ -124,6 +124,14 @@ Pass the file path to LFS via `wind_profiles` in `simulation.yaml`. `N` must be 
 | Debugging / verification | Any | 0.0 | Deterministic mean — all N profiles identical |
 
 
+## Related Tools
+
+| Tool | Purpose |
+|------|---------|
+| [leeds-flight-simulator](https://github.com/leedsrocketry/leeds-flight-simulator) | 6DoF Monte Carlo flight simulator that consumes the wind profile `.npz` files windgen produces |
+| [pyrasaero](https://github.com/leedsrocketry/pyrasaero) | Generates the per-component aero tables for LFS |
+
+
 ## Contact
 
 - **Toby Thomson** — el21tbt@leeds.ac.uk, me@tobythomson.co.uk
