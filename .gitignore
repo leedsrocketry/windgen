@@ -6,3 +6,4 @@ build/
 .venv/
 .claude/
 CLAUDE.md
+earthgram/
