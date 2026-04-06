@@ -204,13 +204,21 @@ def _stop_warning_capture(original: object) -> None:
 
 
 class _QuietGroup(click.Group):
-    """Suppress Click's default ``Aborted!`` on keyboard interrupt."""
+    """Suppress Click's ``Aborted!`` and style uncaught exceptions."""
 
     def invoke(self, ctx: click.Context):
         try:
             return super().invoke(ctx)
         except KeyboardInterrupt:
             raise SystemExit(130)
+        except (click.exceptions.Exit, click.Abort, click.ClickException):
+            raise
+        except Exception as exc:
+            console.print(Panel(
+                f"{type(exc).__name__}: {exc}",
+                border_style="red", title="ERROR", title_align="left",
+            ))
+            raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
