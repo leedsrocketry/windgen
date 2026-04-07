@@ -121,7 +121,11 @@ This is the only command that requires internet access. The resulting mean profi
 python . preview TARGET [-q]
 ```
 
-Plots wind profiles from a `.npz` file or a directory of `.npz` files. Shows mean wind speed with min/max envelope and mean wind heading vs altitude (metres and feet).
+Plots wind profiles from a `.npz` file or a directory of `.npz` files. Three panels:
+
+1. **Wind speed vs altitude** — mean with min/max envelope.
+2. **Wind heading vs altitude** — circular mean direction.
+3. **East vs North scatter** — directional distribution of wind at three altitudes (surface, midpoint, and top of the grid) with PCA ellipses enclosing all points. A circular scatter cloud indicates no prevailing wind direction (and will produce circular landing dispersion in LFS); an elongated cloud indicates a directional bias.
 
 | Option | Description |
 |--------|-------------|
