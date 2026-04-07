@@ -112,6 +112,8 @@ def fetch_mean_profile(
 
     Returns ``(altitude_m, wind_east_ms, wind_north_ms)`` where
     ``altitude_m`` is in metres AGL and wind arrays have shape ``(1, M)``.
+    Wind components use the "blowing towards" convention (GFS native:
+    ``ugrd`` = towards east, ``vgrd`` = towards north).
     """
     date_str, cycle = _nearest_cycle(date)
 

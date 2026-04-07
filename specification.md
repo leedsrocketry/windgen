@@ -15,8 +15,8 @@ All commands that produce wind data write NumPy `.npz` files containing:
 | Array key | Shape | Description |
 |-----------|-------|-------------|
 | `altitude_m` | `(M,)` | Altitude grid in metres AGL, monotonically increasing |
-| `wind_east_ms` | `(N, M)` | Eastward wind component per profile per altitude (m/s) |
-| `wind_north_ms` | `(N, M)` | Northward wind component per profile per altitude (m/s) |
+| `wind_east_ms` | `(N, M)` | Eastward wind component per profile per altitude (m/s, positive = blowing towards east) |
+| `wind_north_ms` | `(N, M)` | Northward wind component per profile per altitude (m/s, positive = blowing towards north) |
 
 `N` is the number of profiles (ensemble size). `M` is the number of altitude grid points. Mean wind files from `fetch` have N=1; perturbed ensembles from `generate` have N≥1. Both use the same format and are directly loadable by LFS `wind.py`.
 

@@ -19,6 +19,8 @@ def fetch_mean_profile(
 
     Returns ``(altitude_m, wind_east_ms, wind_north_ms)`` where
     ``altitude_m`` is in metres AGL and wind arrays have shape ``(1, M)``.
+    Wind components use the "blowing towards" convention (positive east
+    = blowing towards east, positive north = blowing towards north).
     """
     try:
         import datapoint  # noqa: F401

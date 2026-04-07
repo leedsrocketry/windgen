@@ -132,11 +132,13 @@ Plots wind profiles from a `.npz` file or a directory of `.npz` files. Shows mea
 
 All commands produce NumPy `.npz` archives with:
 
+**Wind components use the "blowing towards" convention.** Positive `wind_east_ms` means wind blowing towards east; positive `wind_north_ms` means wind blowing towards north. This matches the standard meteorological u/v component convention used by GFS, ECMWF, and EarthGRAM.
+
 | Key | Shape | Description |
 |-----|-------|-------------|
 | `altitude_m` | `(M,)` | Altitude grid in metres AGL, monotonically increasing |
-| `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s) |
-| `wind_north_ms` | `(N, M)` | Northward wind component per profile (m/s) |
+| `wind_east_ms` | `(N, M)` | Eastward wind component per profile (m/s, positive = blowing towards east) |
+| `wind_north_ms` | `(N, M)` | Northward wind component per profile (m/s, positive = blowing towards north) |
 | `metadata` | string | JSON: source, timestamp, site, perturbation scale, ensemble size |
 
 `N` = number of profiles (1 for `fetch`, typically 1000 for `generate`). `M` = altitude grid points (typically 81 for 0–20,000 m at 250 m). LFS loads these via `wind.py` without knowledge of the source.

@@ -123,9 +123,9 @@ def _parse_output_csv(
     altitude_m : ndarray, shape (M,)
         Altitude in metres AGL.
     ew_wind : ndarray, shape (M,)
-        Perturbed eastward wind (m/s).
+        Perturbed eastward wind (m/s, positive = blowing towards east).
     ns_wind : ndarray, shape (M,)
-        Perturbed northward wind (m/s).
+        Perturbed northward wind (m/s, positive = blowing towards north).
     """
     heights_km: list[float] = []
     ew: list[float] = []
