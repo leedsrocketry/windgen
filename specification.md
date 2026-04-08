@@ -3,9 +3,9 @@
 
 ## 1 Purpose
 
-This tool generates ensembles of perturbed wind profiles for consumption by the Leeds Flight Simulator (LFS). It encapsulates all wind data source handling (EarthGRAM climatology, GFS forecasts, ECMWF forecasts, UKV forecasts and radiosonde measurements) and perturbation modelling behind a CLI, producing `.npz` files that the simulator reads without knowledge of the source.
+This tool generates ensembles of perturbed wind profiles for consumption by the Leeds Flight Simulator (LFS). It encapsulates wind data source handling (EarthGRAM climatology and GFS/ECMWF/UKV mean forecasts) behind a CLI, producing `.npz` files that the simulator reads without knowledge of the source.
 
-The tool is used at each stage of a launch campaign — safety case preparation (months before), operations planning (days before), and launch-day go/no-go (hours before) — to generate the appropriate wind input for the simulator.
+EarthGRAM is used only for **climatological** ensemble generation (safety case preparation, months before launch). Forecast and radiosonde data are fetched and stored as deterministic mean profiles — they are **not** fed through EarthGRAM for perturbation, because EarthGRAM's climatological perturbation statistics do not accurately represent forecast or measurement uncertainty.
 
 
 ## 2 Output Format
@@ -20,7 +20,7 @@ All commands that produce wind data write NumPy `.npz` files containing:
 
 `N` is the number of profiles (ensemble size). `M` is the number of altitude grid points. Mean wind files from `fetch` have N=1; perturbed ensembles from `generate` have N≥1. Both use the same format and are directly loadable by LFS `wind.py`.
 
-The file also stores generation metadata as a serialised JSON string under the key `metadata`, containing: source type, generation timestamp, applicable date, launch site coordinates (including elevation), perturbation scale, and (where applicable) the input mean profile path.
+The file also stores generation metadata as a serialised JSON string under the key `metadata`, containing: source type, generation timestamp, applicable date, launch site coordinates (including elevation), and perturbation scale.
 
 ### 2.1 Altitude Convention
 
@@ -39,7 +39,7 @@ Uses EarthGRAM's internal climatological database (NCEP) for both the mean wind 
 
 **When:** Days before launch, for operations planning.
 
-The `fetch` command downloads GFS forecast data from the NOAA API for the specified date range and extracts the mean wind profile at the launch site (nearest grid point or bilinear interpolation). The resulting mean profile can then be fed to `generate` as an auxiliary atmosphere for perturbation generation. GFS data is freely available and updated four times daily.
+The `fetch` command downloads GFS forecast data from the NOAA API for the specified date range and extracts the mean wind profile at the launch site (nearest grid point or bilinear interpolation). The resulting mean profile is saved as an N=1 `.npz` for direct use by LFS. GFS data is freely available and updated four times daily.
 
 ### 3.3 ECMWF Forecast
 
@@ -57,7 +57,7 @@ The `fetch` command downloads UKV forecast data for the specified date range. Ha
 
 **When:** Hours before launch, on site, for go/no-go decision.
 
-A weather balloon sounding from the launch site gives the actual wind profile overhead at the time of measurement. The sounding is converted to a mean wind `.npz` (N=1) and fed to `generate --mean`, the same as any forecast source. This is the most accurate input and is what the launch director uses for the final call.
+A weather balloon sounding from the launch site gives the actual wind profile overhead at the time of measurement. The sounding is converted to a mean wind `.npz` (N=1) and loaded directly by LFS. This is the most accurate input and is what the launch director uses for the final call.
 
 
 ## 4 Perturbation Model
@@ -71,7 +71,7 @@ The `RandomPerturbationScale` / `HorizontalWindPerturbationScale` parameters con
 
 For each profile `i` in the ensemble (i = 0 … N−1):
 
-1. Write a NAMELIST input file configuring: launch site lat/lon, date/time, perturbation scale, altitude grid (`InitialHeight`, `DeltaHeight`, `NumberOfPositions`), `InitialRandomSeed` derived deterministically from a master seed and profile index `i`, and data/SPICE paths. If a mean wind profile is provided (from any source — forecast or radiosonde), configure it as an auxiliary atmosphere (`UseAuxiliaryAtmosphere = 1`).
+1. Write a NAMELIST input file configuring: launch site lat/lon, date/time, perturbation scale, altitude grid (`InitialHeight`, `DeltaHeight`, `NumberOfPositions`), `InitialRandomSeed` derived deterministically from a master seed and profile index `i`, and data/SPICE paths.
 2. Invoke `earthgram/bin/EarthGRAM.exe -file <namelist>` via `subprocess.run()`.
 3. Parse the output CSV. Read `PerturbedEWWind_ms` (eastward, m/s) and `PerturbedNSWind_ms` (northward, m/s) at each altitude from the `Height_km` column. Subtract site elevation and convert to metres AGL.
 4. Store as row `i` of the output arrays.
@@ -102,8 +102,6 @@ LFS will not be a dependency of windgen.
 | Missing required config fields (`site.latitude`, etc.) | "Config missing required field: site.{field}" |
 | `earthgram/bin/EarthGRAM.exe` not found | "EarthGRAM not found at {path}. See CLAUDE.md for setup." |
 | EarthGRAM process exits non-zero | "EarthGRAM failed (exit {code}): {stderr}" |
-| `--mean` file/directory not found | "Mean profile not found: {path}" |
-| Date cannot be parsed from mean profile filename | "Cannot parse date from filename: {name}. Expected {DD-MM-YY}-{source}.npz" |
 | `fetch` network request fails | "Failed to download {source} data: {reason}" |
 | `fetch` source dependency not installed | "{source} requires {package}. Install with: pip install {package}" |
 | NCEP data missing for requested month | "NCEP data not found for month {month}. Copy Nb9715{mm}.bin to earthgram/data/NCEPdata/FixedBin/" |
@@ -112,8 +110,6 @@ LFS will not be a dependency of windgen.
 
 | Condition | Message |
 |-----------|---------|
-| `DATE` supplied with `--mean` (dates derived from filenames) | "Ignoring DATE argument — dates taken from mean profile filename(s)" |
-| `--mean` directory contains no `.npz` files | "No .npz files found in {path}" (then errors) |
 | Output file already exists (will be overwritten) | "Overwriting {path}" |
 | `--n-profiles` or `--master-seed` not given and not in config | "Using default {param}={value}" |
 
@@ -164,26 +160,20 @@ python . generate CONFIG [DATE] [DATE_END] [OPTIONS]
 
 Generates a perturbed wind profile ensemble for each day.
 
-**Date resolution:** The dates to generate for are determined by one of two mutually exclusive modes:
-
-- **Climatology mode** (no `--mean`): `DATE` is required. `DATE_END` is optional (defaults to `DATE`). Generates one ensemble per day in the range.
-- **Mean profile mode** (`--mean`): dates are parsed from the mean profile filename(s) (`{DD-MM-YY}-{source}.npz`). If `DATE` is also supplied, it is ignored with a warning. If a date cannot be parsed from a filename, error and exit.
-
-When `--mean` points to a **directory**, all `.npz` files in that directory are processed — one ensemble per file, dates and source names taken from filenames.
+**Date resolution:** `DATE` is required. `DATE_END` is optional (defaults to `DATE`). When a date range is given, a single ensemble is generated for the midpoint date (climatological statistics barely shift over short windows).
 
 **Arguments:**
 
 | Name | Type | Description |
 |------|------|-------------|
 | `CONFIG` | `click.Path(exists=True)` | LFS simulation `config.yaml` (provides `site.latitude`, `site.longitude`, `site.elevation`) |
-| `DATE` | `str` (optional) | Start date (`DD-MM-YY`). Required in climatology mode, ignored with warning in mean profile mode. |
-| `DATE_END` | `str` (optional) | End date, inclusive. Only used in climatology mode. |
+| `DATE` | `str` | Start date (`DD-MM-YY`), required. |
+| `DATE_END` | `str` (optional) | End date, inclusive. |
 
 **Options:**
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--mean` | `Path` | — | Mean wind profile `.npz` (from `fetch`), or directory of `.npz` files. If omitted, uses EarthGRAM climatology. |
 | `--perturbation-scale` | `float` | `1.0` | Perturbation magnitude (0.0 = deterministic, 1.0 = full variability) |
 | `--n-profiles` | `int` | from config | Number of ensemble members. Falls back to LFS config `montecarlo.n_samples`, then default 1000. |
 | `--master-seed` | `int` | from config | Master random seed. Falls back to LFS config `montecarlo.master_seed`, then default 42. |
@@ -193,8 +183,7 @@ When `--mean` points to a **directory**, all `.npz` files in that directory are 
 
 **Output files:** Written to `wind/` relative to `CONFIG`. The filename is derived from the date and source:
 
-- With `--mean wind/mean/13-07-26-gfs.npz` → `wind/13-07-26-gfs.npz`
-- Without `--mean` (climatology) → `wind/13-07-26-earthgram.npz`
+- Example: `wind/13-07-26-earthgram.npz`
 
 One `.npz` per day. Creates the directory if it does not exist.
 
@@ -235,10 +224,8 @@ simulations/cases/g2b2-cape-wrath/
 │   │   ├── 12-07-26-gfs.npz        # fetch output: GFS mean, 12 Jul 2026
 │   │   ├── 12-07-26-ecmwf.npz      # fetch output: ECMWF mean, 12 Jul 2026
 │   │   └── 13-07-26-gfs.npz        # fetch output: GFS mean, 13 Jul 2026
-│   ├── 12-07-26-gfs.npz            # generate output: perturbed ensemble from GFS mean
-│   ├── 12-07-26-ecmwf.npz          # generate output: perturbed ensemble from ECMWF mean
 │   ├── 12-07-26-earthgram.npz      # generate output: perturbed ensemble from climatology
-│   └── 13-07-26-gfs.npz
+│   └── ...
 └── results/
 ```
 
@@ -289,7 +276,7 @@ def fetch_mean_profile(
 
 ### 8.2 Generate
 
-`generate.py` handles all EarthGRAM interaction. It builds a NAMELIST template from the site config, optionally sets `UseAuxiliaryAtmosphere = 1` if a mean profile is provided, then iterates over seeds — writing a NAMELIST, invoking `EarthGRAM.exe`, and parsing the CSV output for each ensemble member. The auxiliary atmosphere mechanism is source-agnostic: any `.npz` with the standard arrays (§2) works, regardless of whether it came from `fetch`, a radiosonde conversion, or manual creation.
+`generate.py` handles all EarthGRAM interaction. It builds a NAMELIST template from the site config, then iterates over seeds — writing a NAMELIST, invoking `EarthGRAM.exe`, and parsing the CSV output for each ensemble member. EarthGRAM is only used for climatological ensemble generation; forecast and radiosonde profiles are used directly by LFS without EarthGRAM perturbation.
 
 
 ## 9 Dependencies
@@ -312,10 +299,10 @@ def fetch_mean_profile(
 
 | Campaign stage | Command | Notes |
 |----------------|---------|-------|
-| Safety case (months before) | `generate CONFIG 12-07-26 14-07-26` | EarthGRAM climatology (no `--mean`), full perturbation |
-| Operations planning (days before) | `fetch CONFIG --source gfs 12-07-26 14-07-26` then `generate CONFIG --mean wind/mean/` | Fetch forecast, generate perturbed ensemble for all fetched days |
-| Go/no-go (hours before, on site) | `generate CONFIG --mean sounding.npz` | Radiosonde measurement as mean input |
-| Debugging/verification | `generate CONFIG 13-07-26 --perturbation-scale 0.0` | Deterministic — all profiles identical to the mean |
+| Safety case (months before) | `generate CONFIG 12-07-26 14-07-26` | EarthGRAM climatology, full perturbation |
+| Operations planning (days before) | `fetch CONFIG --source gfs 12-07-26 14-07-26` | Download forecast means; use directly in LFS |
+| Go/no-go (hours before, on site) | Convert radiosonde sounding to `.npz` | Use directly in LFS |
+| Debugging/verification | `generate CONFIG 13-07-26 --perturbation-scale 0.1` | Near-identical profiles (minimum variability) |
 | Visual check | `preview wind/` or `preview wind/13-07-26-gfs.npz` | Inspect before running LFS |
 
 Update `wind_profiles` in `config.yaml` to point at the chosen `.npz` file, then run the simulator.

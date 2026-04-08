@@ -35,7 +35,7 @@ def _namelist(
     altitude_step_m: int,
     output_file: str,
     list_file: str,
-    aux_atm_file: str | None = None,
+
 ) -> str:
     """Build an EarthGRAM NAMELIST input string."""
     # EarthGRAM uses km for heights and expects DeltaHeight in km.
@@ -63,9 +63,7 @@ def _namelist(
         "  Seconds   = 0.0",
         "",
         f"  InitialRandomSeed               = {seed}",
-        f"  RandomPerturbationScale         = {perturbation_scale}",
         f"  HorizontalWindPerturbationScale = {perturbation_scale}",
-        f"  VerticalWindPerturbationScale   = {perturbation_scale}",
         "  NumberOfMonteCarloRuns          = 1",
         "",
         "  ThermosphereModel = 1",
@@ -91,11 +89,7 @@ def _namelist(
         "",
     ]
 
-    if aux_atm_file is not None:
-        lines.append(f"  UseAuxiliaryAtmosphere = 1")
-        lines.append(f"  AuxAtmosphereFileName = '{aux_atm_file}'")
-    else:
-        lines.append("  UseAuxiliaryAtmosphere = 0")
+    lines.append("  UseAuxiliaryAtmosphere = 0")
 
     lines += [
         "  FastModeOn        = 0",
@@ -146,32 +140,6 @@ def _parse_output_csv(
 
 
 # ---------------------------------------------------------------------------
-# Auxiliary atmosphere file for mean profiles
-# ---------------------------------------------------------------------------
-
-
-def _write_aux_atmosphere(
-    path: Path,
-    altitude_m: np.ndarray,
-    wind_east_ms: np.ndarray,
-    wind_north_ms: np.ndarray,
-    elevation_km: float,
-) -> None:
-    """Write an EarthGRAM auxiliary atmosphere file from a mean wind profile.
-
-    The file format is whitespace-delimited columns:
-    Height_km  EWWind_ms  NSWind_ms
-    Heights are MSL in km.
-    """
-    # Convert AGL metres to MSL km
-    alt_msl_km = altitude_m / 1000.0 + elevation_km
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"{h:.4f}  {ew:.4f}  {ns:.4f}" for h, ew, ns in zip(alt_msl_km, wind_east_ms, wind_north_ms)]
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
 # Seed derivation
 # ---------------------------------------------------------------------------
 
@@ -207,7 +175,6 @@ def generate_ensemble(
     perturbation_scale: float,
     altitude_max_m: int,
     altitude_step_m: int,
-    mean_profile: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Generate a perturbed wind profile ensemble via EarthGRAM.
@@ -228,9 +195,6 @@ def generate_ensemble(
         Maximum altitude in metres AGL.
     altitude_step_m : int
         Altitude grid spacing in metres.
-    mean_profile : tuple, optional
-        ``(altitude_m, wind_east_ms, wind_north_ms)`` from a mean wind file.
-        If provided, used as auxiliary atmosphere.
     on_progress : callable, optional
         Called with ``(current_index, n_profiles)`` after each profile.
 
@@ -251,16 +215,6 @@ def generate_ensemble(
     # (bin/), not the CWD.  Run from bin/ and manage all I/O there.
     bin_dir = _EARTHGRAM_EXE.parent
 
-    # Write auxiliary atmosphere if mean profile provided
-    aux_path: str | None = None
-    if mean_profile is not None:
-        aux_file = bin_dir / "_aux_atm.dat"
-        alt, ew, ns = mean_profile
-        ew_1d = ew.squeeze()
-        ns_1d = ns.squeeze()
-        _write_aux_atmosphere(aux_file, alt, ew_1d, ns_1d, elevation_km)
-        aux_path = "_aux_atm.dat"
-
     try:
         for i in range(n_profiles):
             seed = derive_seed(master_seed, i)
@@ -277,7 +231,6 @@ def generate_ensemble(
                 altitude_step_m=altitude_step_m,
                 output_file=output_csv,
                 list_file=list_file,
-                aux_atm_file=aux_path,
             )
 
             nml_path = bin_dir / nml_file
@@ -313,7 +266,6 @@ def generate_ensemble(
         # Clean up temporary files from bin/
         for f in bin_dir.glob("_wg_*"):
             f.unlink(missing_ok=True)
-        (bin_dir / "_aux_atm.dat").unlink(missing_ok=True)
 
     assert altitude_m is not None
     return altitude_m, np.stack(all_ew), np.stack(all_ns)
@@ -327,7 +279,6 @@ def build_metadata(
     perturbation_scale: float,
     n_profiles: int,
     master_seed: int,
-    mean_profile_path: str | None = None,
 ) -> dict[str, Any]:
     """Build generation metadata dict for embedding in .npz."""
     meta: dict[str, Any] = {
@@ -343,6 +294,4 @@ def build_metadata(
         "n_profiles": n_profiles,
         "master_seed": master_seed,
     }
-    if mean_profile_path is not None:
-        meta["mean_profile"] = mean_profile_path
     return meta

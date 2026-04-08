@@ -12,7 +12,6 @@ from windgen.config import SiteConfig
 from windgen.generate import (
     _namelist,
     _parse_output_csv,
-    _write_aux_atmosphere,
     derive_seed,
 )
 
@@ -55,21 +54,21 @@ class TestNamelist:
         assert "InitialLatitude       = 58.61" in nml
         assert "UseAuxiliaryAtmosphere = 0" in nml
 
-    def test_with_aux(self) -> None:
+    def test_only_horizontal_wind_scaled(self) -> None:
         site = SiteConfig(latitude=58.61, longitude=-4.94, elevation=0.0)
         nml = _namelist(
             site=site,
             date=datetime.date(2026, 7, 13),
             seed=1,
             perturbation_scale=0.5,
-            altitude_max_m=10000,
-            altitude_step_m=500,
+            altitude_max_m=20000,
+            altitude_step_m=250,
             output_file="out.csv",
             list_file="out.md",
-            aux_atm_file="/tmp/aux.dat",
         )
-        assert "UseAuxiliaryAtmosphere = 1" in nml
-        assert "AuxAtmosphereFileName = '/tmp/aux.dat'" in nml
+        assert "HorizontalWindPerturbationScale = 0.5" in nml
+        assert "RandomPerturbationScale" not in nml
+        assert "VerticalWindPerturbationScale" not in nml
 
     def test_altitude_grid(self) -> None:
         site = SiteConfig(latitude=0, longitude=0, elevation=100.0)
@@ -118,31 +117,3 @@ class TestParseOutputCsv:
         np.testing.assert_array_almost_equal(ew, [3.0, 5.0])
 
 
-class TestAuxAtmosphereContent:
-    """Test the aux atmosphere conversion logic (AGL→MSL, formatting)."""
-
-    def test_agl_to_msl_conversion(self) -> None:
-        alt_m = np.array([0.0, 250.0, 500.0])
-        elevation_km = 0.1
-        alt_msl_km = alt_m / 1000.0 + elevation_km
-        np.testing.assert_array_almost_equal(alt_msl_km, [0.1, 0.35, 0.6])
-
-    def test_line_format(self) -> None:
-        h, ew, ns = 0.1, 1.0, 4.0
-        line = f"{h:.4f}  {ew:.4f}  {ns:.4f}"
-        parts = line.split()
-        assert float(parts[0]) == pytest.approx(0.1)
-        assert float(parts[1]) == pytest.approx(1.0)
-        assert float(parts[2]) == pytest.approx(4.0)
-
-    def test_three_rows(self) -> None:
-        alt_m = np.array([0.0, 250.0, 500.0])
-        ew = np.array([1.0, 2.0, 3.0])
-        ns = np.array([4.0, 5.0, 6.0])
-        elevation_km = 0.1
-        alt_msl_km = alt_m / 1000.0 + elevation_km
-        lines = [
-            f"{h:.4f}  {e:.4f}  {n:.4f}"
-            for h, e, n in zip(alt_msl_km, ew, ns)
-        ]
-        assert len(lines) == 3

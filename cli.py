@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 import sys
 import warnings as _warnings_mod
 from pathlib import Path
@@ -362,10 +363,8 @@ def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
 @click.argument("config", type=click.Path(exists=True))
 @click.argument("date", type=str, required=False, default=None)
 @click.argument("date_end", type=str, required=False, default=None)
-@click.option("--mean", "mean_path", type=click.Path(), default=None,
-              help="Mean wind profile .npz or directory of .npz files.")
-@click.option("--perturbation-scale", type=float, default=1.0,
-              help="Perturbation magnitude (0.0\u20131.0).")
+@click.option("--scale", type=float, default=1.0,
+              help="Horizontal wind perturbation scale factor (0.1\u20132.0).")
 @click.option("--n-profiles", type=int, default=None,
               help="Number of ensemble members.")
 @click.option("--master-seed", type=int, default=None,
@@ -380,8 +379,7 @@ def generate(
     config: str,
     date: str | None,
     date_end: str | None,
-    mean_path: str | None,
-    perturbation_scale: float,
+    scale: float,
     n_profiles: int | None,
     master_seed: int | None,
     altitude_max: int,
@@ -404,6 +402,10 @@ def generate(
         _error_exit(str(exc))
         return
 
+    if not 0.1 <= scale <= 2.0:
+        _error_exit("--scale must be between 0.1 and 2.0 (EarthGRAM range).")
+        return
+
     # Resolve n_profiles and master_seed from config fallbacks
     mc = load_montecarlo(config_path)
     if n_profiles is None:
@@ -413,68 +415,30 @@ def generate(
         master_seed = mc.master_seed
         warns.append(f"Using master-seed={master_seed} from config")
 
-    # Resolve dates and mean profiles
-    jobs: list[tuple[datetime.date, str, tuple | None]] = []
+    # Resolve dates
+    jobs: list[tuple[datetime.date, str]] = []
 
-    if mean_path is not None:
-        mp = Path(mean_path)
-        if date_end is not None:
-            _print_warnings(warns)
-            _error_exit("DATE_END is not valid with --mean. Dates are taken from the mean profile filename(s).")
-            return
-        if date is not None:
-            warns.append("Ignoring DATE argument \u2014 dates taken from mean profile filename(s)")
-
-        if mp.is_dir():
-            npz_files = sorted(mp.glob("*.npz"))
-            if not npz_files:
-                warns.append(f"No .npz files found in {mp}")
-                _print_warnings(warns)
-                _error_exit(f"No .npz files found in {mp}")
-                return
-            for npz in npz_files:
-                try:
-                    d, source_name = outputs.parse_filename(npz.name)
-                except ValueError as exc:
-                    _print_warnings(warns)
-                    _error_exit(str(exc))
-                    return
-                alt, ew, ns, _ = outputs.load_ensemble(npz)
-                jobs.append((d, source_name, (alt, ew, ns)))
-        elif mp.is_file():
-            try:
-                d, source_name = outputs.parse_filename(mp.name)
-            except ValueError as exc:
-                _print_warnings(warns)
-                _error_exit(str(exc))
-                return
-            alt, ew, ns, _ = outputs.load_ensemble(mp)
-            jobs.append((d, source_name, (alt, ew, ns)))
-        else:
-            _error_exit(f"Mean profile not found: {mean_path}")
-            return
+    if date is None:
+        _print_warnings(warns)
+        _error_exit("DATE is required.")
+        return
+    start = _parse_date(date)
+    end = _parse_date(date_end) if date_end else start
+    if start == end:
+        jobs.append((start, "earthgram"))
     else:
-        if date is None:
-            _print_warnings(warns)
-            _error_exit("DATE is required in climatology mode (no --mean).")
-            return
-        start = _parse_date(date)
-        end = _parse_date(date_end) if date_end else start
-        if start == end:
-            jobs.append((start, "earthgram", None))
-        else:
-            span_days = (end - start).days
-            if span_days > 14:
-                warns.append(
-                    f"Date range spans {span_days} days (>{_MAX_CLIM_RANGE_DAYS}). "
-                    "Climatological variability may be non-negligible across this window."
-                )
-            midpoint = start + datetime.timedelta(days=span_days // 2)
+        span_days = (end - start).days
+        if span_days > 14:
             warns.append(
-                f"Climatology mode: using midpoint date {midpoint.strftime('%d-%m-%y')} "
-                f"for range {start.strftime('%d-%m-%y')} to {end.strftime('%d-%m-%y')}"
+                f"Date range spans {span_days} days (>{_MAX_CLIM_RANGE_DAYS}). "
+                "Climatological variability may be non-negligible across this window."
             )
-            jobs.append((midpoint, "earthgram", None))
+        midpoint = start + datetime.timedelta(days=span_days // 2)
+        warns.append(
+            f"Climatology mode: using midpoint date {midpoint.strftime('%d-%m-%y')} "
+            f"for range {start.strftime('%d-%m-%y')} to {end.strftime('%d-%m-%y')}"
+        )
+        jobs.append((midpoint, "earthgram"))
 
     out_dir = config_path.parent / "wind"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -488,7 +452,7 @@ def generate(
     captured, original_warn = _start_warning_capture(display)
 
     try:
-        for job_date, source_name, mean_prof in jobs:
+        for job_date, source_name in jobs:
             fname = outputs.make_filename(job_date, source_name)
             out_path = out_dir / fname
             if out_path.exists():
@@ -505,10 +469,9 @@ def generate(
                 date=job_date,
                 n_profiles=n_profiles,
                 master_seed=master_seed,
-                perturbation_scale=perturbation_scale,
+                perturbation_scale=scale,
                 altitude_max_m=altitude_max,
                 altitude_step_m=altitude_step,
-                mean_profile=mean_prof,
                 on_progress=_on_progress,
             )
 
@@ -518,10 +481,9 @@ def generate(
                 source=source_name,
                 date=job_date,
                 site=site,
-                perturbation_scale=perturbation_scale,
+                perturbation_scale=scale,
                 n_profiles=n_profiles,
                 master_seed=master_seed,
-                mean_profile_path=str(mean_path) if mean_path else None,
             )
             outputs.save_ensemble(out_path, alt, ew, ns, metadata=meta)
             outputs_paths.append(out_path)
@@ -561,3 +523,81 @@ def preview(target: str, no_popup: bool) -> None:
         outputs.plot_ensemble(npz, save=no_popup)
         if no_popup:
             console.print(f"[green]Saved {npz.with_suffix('.png')}[/green]")
+
+
+# ---------------------------------------------------------------------------
+# window command
+# ---------------------------------------------------------------------------
+
+
+def _coverage_probability(scale: float) -> float:
+    """Fraction of real days whose wind falls within the Monte Carlo envelope.
+
+    A Monte Carlo ensemble at perturbation scale *s* spans approximately
+    ±3·s·σ_real (the ±3σ convention).  The fraction of a standard normal
+    distribution inside that range is erf(3·s / √2).
+    """
+    return math.erf(3 * scale / math.sqrt(2))
+
+
+def _min_window_days(p: float, confidence: float) -> int:
+    """Minimum days for P(≥1 launchable day) ≥ confidence."""
+    return math.ceil(math.log(1 - confidence) / math.log(1 - p))
+
+
+def _max_confident_days(n: int, p: float, confidence: float) -> int:
+    """Largest k where P(X ≥ k | n, p) ≥ confidence."""
+    threshold = 1 - confidence
+    q = 1 - p
+    cdf_below = 0.0
+    pmf = q ** n
+    best_k = 0
+    for j in range(n + 1):
+        if cdf_below <= threshold:
+            best_k = j
+        else:
+            break
+        if j == 0:
+            pmf_val = pmf
+        else:
+            pmf = pmf * (n - j + 1) / j * p / q
+            pmf_val = pmf
+        cdf_below += pmf_val
+    return best_k
+
+
+@main.command()
+@click.option("--scale", type=float, required=True,
+              help="Perturbation scale factor used in generate (0.1–2.0).")
+@click.option("--confidence", type=float, default=0.95,
+              help="Target confidence level (default 0.95).")
+@click.option("--duration", type=int, default=None,
+              help="Launch window length in days.")
+def window(scale: float, confidence: float, duration: int | None) -> None:
+    """Compute launch window size or expected launch opportunities."""
+    if not 0.1 <= scale <= 2.0:
+        _error_exit("--scale must be between 0.1 and 2.0 (EarthGRAM range).")
+        return
+    if not 0 < confidence < 1:
+        _error_exit("--confidence must be between 0 and 1.")
+        return
+    if duration is not None and duration < 1:
+        _error_exit("--duration must be at least 1.")
+        return
+
+    p = _coverage_probability(scale)
+
+    if duration is None:
+        n = _min_window_days(p, confidence)
+        console.print(f"Minimum launch window: {n} days")
+        console.print(
+            f"({confidence * 100:.1f}% confidence of at least 1 launchable day, "
+            f"perturbation scale {scale:.2f})"
+        )
+    else:
+        k = _max_confident_days(duration, p, confidence)
+        console.print(f"Guaranteed launchable days: at least {k} of {duration}")
+        console.print(
+            f"({confidence * 100:.1f}% confidence, "
+            f"perturbation scale {scale:.2f})"
+        )
