@@ -1,13 +1,16 @@
 """
 Reads each raw .grib2 file in the grib/ directory, extracts the valid time
-and pressure level from the file itself, then renames it to:
+and pressure level from the file itself, then copies it to:
 
     isbl_{pressure}hPa_{valid_time}.grib2
 
 e.g.  isbl_1000hPa_20260616T1800Z.grib2
+
+The original file is kept in place.
 """
 
 import os
+import shutil
 import xarray as xr
 import numpy as np
 from pathlib import Path
@@ -39,7 +42,7 @@ def new_name(pressure_hpa: float, valid_time: str) -> str:
 
 
 files = sorted(GRIB_DIR.glob("*.grib2"))
-print(f"Found {len(files)} files to rename\n")
+print(f"Found {len(files)} files to copy\n")
 
 for path in files:
     try:
@@ -55,7 +58,7 @@ for path in files:
             print(f"  SKIP (already exists)  {dest.name}")
             continue
 
-        os.rename(path, dest)
+        shutil.copy2(path, dest)
         print(f"  {path.name}")
         print(f"       -> {dest.name}")
 

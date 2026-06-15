@@ -270,15 +270,25 @@ def main() -> None:
 )
 @click.argument("date", type=str)
 @click.argument("date_end", type=str, required=False, default=None)
-def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
+@click.option("--n-profiles", type=int, default=None,
+              help="Number of profiles to tile into the output npz.")
+@click.option("--time", "times", type=str, multiple=True, metavar="HHMM",
+              help="UTC time(s) to use for UKV (e.g. 0900 1200 1500). Repeatable.")
+def fetch(config: str, source: str, date: str, date_end: str | None, n_profiles: int | None, times: tuple[str, ...]) -> None:
     """Download forecast mean wind profiles from GFS/ECMWF/UKV."""
     config_path = Path(config)
+    warns: list[str] = []
 
     try:
         site = load_site(config_path)
     except (FileNotFoundError, ValueError) as exc:
         _error_exit(str(exc))
         return
+
+    mc = load_montecarlo(config_path)
+    if n_profiles is None:
+        n_profiles = mc.n_samples
+        warns.append(f"Using n-profiles={n_profiles} from config")
 
     start = _parse_date(date)
     end = _parse_date(date_end) if date_end else start
@@ -293,6 +303,9 @@ def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
             from .fetch import ecmwf as src_mod
         elif source_lower == "ukv":
             from .fetch import ukv as src_mod
+            if not times:
+                _error_exit("--time HHMM is required for --source ukv (e.g. --time 0900 --time 1200)")
+                return
         else:
             _error_exit(f"Unknown source: {source}")
             return
@@ -300,10 +313,12 @@ def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
         _error_exit(str(exc))
         return
 
-    out_dir = config_path.parent / "wind" / "mean"
+    out_dir = config_path.parent / "wind"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     display = _RunDisplay(console)
+    for w in warns:
+        display.add_warning(w)
     display.update_status("Fetching forecast data...")
     display.start()
     captured, original_warn = _start_warning_capture(display)
@@ -313,20 +328,39 @@ def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
         display.start_task(task)
 
         for d in dates:
-            fname = outputs.make_filename(d, source_lower)
+            if source_lower == "ukv" and times:
+                time_tag = "_".join(times)
+                fname = f"{d.strftime('%d-%m-%y')}-T{time_tag}-{source_lower}.npz"
+            else:
+                fname = outputs.make_filename(d, source_lower)
             out_path = out_dir / fname
             if out_path.exists():
                 display.add_warning(f"Overwriting {out_path}")
 
             try:
-                alt, ew, ns = src_mod.fetch_mean_profile(
-                    date=d,
-                    lat=site.latitude,
-                    lon=site.longitude,
-                    elevation=site.elevation,
-                    altitude_max_m=20000,
-                    altitude_step_m=250,
-                )
+                if source_lower == "ukv":
+                    dts = [
+                        datetime.datetime(d.year, d.month, d.day,
+                                          int(t[:2]), int(t[2:]))
+                        for t in times
+                    ]
+                    alt, ew, ns = src_mod.fetch_mean_profile(
+                        datetimes=dts,
+                        lat=site.latitude,
+                        lon=site.longitude,
+                        elevation=site.elevation,
+                        altitude_max_m=20000,
+                        altitude_step_m=250,
+                    )
+                else:
+                    alt, ew, ns = src_mod.fetch_mean_profile(
+                        date=d,
+                        lat=site.latitude,
+                        lon=site.longitude,
+                        elevation=site.elevation,
+                        altitude_max_m=20000,
+                        altitude_step_m=250,
+                    )
             except Exception as exc:
                 display.stop()
                 _stop_warning_capture(original_warn)
@@ -334,13 +368,17 @@ def fetch(config: str, source: str, date: str, date_end: str | None) -> None:
                 _error_exit(f"Failed to download {source_lower} data: {exc}")
                 return
 
+            # Tile the single mean profile to match the expected ensemble shape.
+            ew = np.repeat(ew, n_profiles, axis=0)
+            ns = np.repeat(ns, n_profiles, axis=0)
+
             meta = gen.build_metadata(
                 source=source_lower,
                 date=d,
                 site=site,
                 perturbation_scale=0.0,
-                n_profiles=1,
-                master_seed=0,
+                n_profiles=n_profiles,
+                master_seed=mc.master_seed,
             )
             outputs.save_ensemble(out_path, alt, ew, ns, metadata=meta)
             display.advance_task(task)
